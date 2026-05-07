@@ -132,6 +132,11 @@ class SpiderMultiProcessEnv(gym.Env):
         # Selectable index range. Train uses all train_spider questions;
         # val uses all dev questions (or test if split=test).
         self.question_idxs = list(range(self._n_examples))
+        # Pool of unseen indices for the current epoch (drained per reset()).
+        # Refilled with a fresh shuffle when emptied → guarantees one full
+        # pass over all questions before any repeats. Val side is overridden
+        # in reset() to use deterministic prefix instead.
+        self._epoch_pool: list = []
 
     # ------------------------------------------------------------------
     # Base API ----------------------------------------------------------
@@ -156,11 +161,27 @@ class SpiderMultiProcessEnv(gym.Env):
         return obs_list, reward_list, done_list, info_list
 
     def reset(self):
-        # Pick env_num distinct question indices, repeat each group_n times
-        # so siblings in a group share the same question (GRPO group).
-        idx = self._rng.choice(
-            self.question_idxs, size=self.env_num, replace=False
-        )
+        """Pick env_num question indices.
+
+        Train side: deterministic shuffled pool, drained one batch at a time.
+        When pool < env_num, refill with a fresh shuffle of all questions →
+        guarantees full coverage of train_spider before any question repeats.
+
+        Val side: deterministic FIRST env_num indices (no rng), so every
+        validation pass evaluates the same fixed sample → stable
+        checkpoint ranking signal (instead of n=64 noise we saw in v1).
+        """
+        if self.is_train:
+            # Refill pool when empty / insufficient
+            if len(self._epoch_pool) < self.env_num:
+                fresh = list(self.question_idxs)
+                self._rng.shuffle(fresh)
+                self._epoch_pool = fresh
+            idx = [self._epoch_pool.pop() for _ in range(self.env_num)]
+        else:
+            # Val: fixed prefix for stable cross-checkpoint comparison
+            idx = self.question_idxs[: self.env_num]
+
         idx = np.repeat(idx, self.group_n).tolist()
 
         futures = [w.reset.remote(int(i)) for w, i in zip(self._workers, idx)]
