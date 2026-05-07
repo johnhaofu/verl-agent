@@ -82,7 +82,12 @@ class SpiderSQLEnv:
         split: str = "train",
         schema_max_chars: int = 4000,
         rows_per_query: int = 10,
+        examples: list | None = None,
     ) -> None:
+        """If `examples` is provided (pre-loaded list of dicts), use it
+        directly and skip JSON parsing. This lets caller share one copy
+        across many workers via Ray plasma object store.
+        """
         self.data_dir = Path(data_dir)
         if split == "test":
             self.db_dir = self.data_dir / "test_database"
@@ -92,7 +97,7 @@ class SpiderSQLEnv:
         self.schema_max_chars = schema_max_chars
         self.rows_per_query = rows_per_query
 
-        self._examples = self._load_examples(split)
+        self._examples = examples if examples is not None else self._load_examples(split)
         self._schema_cache: dict[str, str] = {}
 
         self._current: Optional[dict] = None

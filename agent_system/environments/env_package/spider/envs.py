@@ -28,15 +28,22 @@ _DEFAULT_DATA_DIR = os.environ.get(
 # -----------------------------------------------------------------------------
 
 class SpiderWorker:
-    """Ray remote actor hosting one SpiderSQLEnv instance."""
+    """Ray remote actor hosting one SpiderSQLEnv instance.
 
-    def __init__(self, seed: int, env_kwargs: dict):
-        # Seed not used — Spider envs are deterministic given idx
+    Receives the example list as a Ray ObjectRef so all workers share
+    one copy in plasma store (avoids loading 7000-row JSON 100× into
+    each Python process — that OOMs the host on 28GB RAM nodes).
+    """
+
+    def __init__(self, seed: int, env_kwargs: dict, examples_ref):
+        import ray as _ray
+        examples = _ray.get(examples_ref)  # zero-copy from plasma store
         self.env = SpiderSQLEnv(
             data_dir=env_kwargs.get("data_dir", _DEFAULT_DATA_DIR),
             split=env_kwargs.get("split", "train"),
             schema_max_chars=env_kwargs.get("schema_max_chars", 4000),
             rows_per_query=env_kwargs.get("rows_per_query", 10),
+            examples=examples,
         )
         self._n_examples = self.env.n_examples
 
@@ -91,11 +98,23 @@ class SpiderMultiProcessEnv(gym.Env):
         self._rng = np.random.RandomState(seed)
         self._env_kwargs = env_kwargs or {}
 
+        # Load Spider examples ONCE in the driver and put into Ray plasma
+        # store so all workers share a single zero-copy reference. Without
+        # this, each Python worker process loads ~25 MB JSON × 100+ workers
+        # → 2.5+ GB extra RAM, OOMing 28 GB hosts (DSW A10).
+        examples = self._load_examples_for_split(
+            self._env_kwargs.get("data_dir", _DEFAULT_DATA_DIR),
+            self._env_kwargs.get("split", "train"),
+        )
+        examples_ref = ray.put(examples)
+
         env_worker = ray.remote(**resources_per_worker)(SpiderWorker)
         self._workers = []
         for i in range(self.num_processes):
             worker = env_worker.remote(
-                seed + (i // self.group_n), self._env_kwargs
+                seed + (i // self.group_n),
+                self._env_kwargs,
+                examples_ref,
             )
             self._workers.append(worker)
 
@@ -145,6 +164,29 @@ class SpiderMultiProcessEnv(gym.Env):
             info_list.append(info)
 
         return obs_list, info_list
+
+    # ------------------------------------------------------------------
+    # Helpers -----------------------------------------------------------
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_examples_for_split(data_dir, split: str) -> list:
+        """Load Spider examples once in the driver. Returns list[dict]."""
+        import json
+        from pathlib import Path
+        if split == "train":
+            files = ["train_spider.json"]
+        elif split in ("validation", "dev"):
+            files = ["dev.json"]
+        elif split == "test":
+            files = ["test.json"]
+        else:
+            raise ValueError(f"unknown split {split!r}")
+        items: list = []
+        for fname in files:
+            with open(Path(data_dir) / fname) as fh:
+                items.extend(json.load(fh))
+        return items
 
     # ------------------------------------------------------------------
     # Cleanup -----------------------------------------------------------
