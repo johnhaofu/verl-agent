@@ -516,6 +516,94 @@ class WebshopEnvironmentManager(EnvironmentManagerBase):
                 success['webshop_task_score (not success_rate)'].append(score_value)
                 return
 
+class SpiderEnvironmentManager(EnvironmentManagerBase):
+    """Manager for Spider text-to-SQL agent."""
+
+    def __init__(self, envs, projection_f, config):
+        self.memory = SimpleMemory()
+        super().__init__(envs, projection_f, config)
+
+    def reset(self, kwargs) -> Tuple[Dict[str, Any], List[Dict]]:
+        text_obs, infos = self.envs.reset()
+        self.tasks = text_obs.copy()
+        self.pre_text_obs = text_obs.copy()
+        self.memory.reset(batch_size=len(text_obs))
+
+        observations = {
+            "text": self.build_text_obs(text_obs, init=True),
+            "image": None,
+            "anchor": text_obs.copy(),
+        }
+        return observations, infos
+
+    def step(self, text_actions: List[str]):
+        actions, valids = self.projection_f(text_actions)
+        next_obs, rewards, dones, infos = self.envs.step(actions)
+
+        self.memory.store({"text_obs": self.pre_text_obs, "action": actions})
+        self.pre_text_obs = next_obs
+
+        next_observations = {
+            "text": self.build_text_obs(next_obs, init=False),
+            "image": None,
+            "anchor": next_obs.copy(),
+        }
+        for i, info in enumerate(infos):
+            info["is_action_valid"] = to_numpy(valids[i])
+
+        rewards = to_numpy(rewards)
+        dones = to_numpy(dones)
+
+        return next_observations, rewards, dones, infos
+
+    def build_text_obs(
+        self,
+        text_obs: List[str],
+        init: bool = False,
+    ) -> List[str]:
+        postprocess_text_obs: List[str] = []
+
+        if not init and self.config.env.history_length > 0:
+            memory_contexts, valid_lens = self.memory.fetch(
+                self.config.env.history_length,
+                obs_key="text_obs",
+                action_key="action",
+            )
+
+        for i in range(len(text_obs)):
+            if init or self.config.env.history_length <= 0:
+                obs = SPIDER_TEMPLATE_NO_HIS.format(
+                    current_observation=text_obs[i],
+                )
+            else:
+                obs = SPIDER_TEMPLATE.format(
+                    step_count=len(self.memory[i]),
+                    history_length=valid_lens[i],
+                    action_history=memory_contexts[i],
+                    current_step=len(self.memory[i]) + 1,
+                    current_observation=text_obs[i],
+                )
+                if len(obs) > 13000:
+                    obs = SPIDER_TEMPLATE_NO_HIS.format(
+                        current_observation=text_obs[i],
+                    )
+
+            postprocess_text_obs.append(obs)
+
+        return postprocess_text_obs
+
+    def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
+        for i in reversed(range(len(total_batch_list[batch_idx]))):
+            batch_item = total_batch_list[batch_idx][i]
+            if batch_item["active_masks"]:
+                info = total_infos[batch_idx][i]
+                won_value = float(info.get("won", False))
+                score_value = float(info.get("task_score", 0.0))
+                success["success_rate"].append(won_value)
+                success["spider_ex_score"].append(score_value)
+                return
+
+
 class AppWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
@@ -684,6 +772,37 @@ def make_envs(config):
         val_envs = WebshopEnvironmentManager(_val_envs, projection_f, config)
         import time
         time.sleep((config.data.train_batch_size * group_n + config.data.val_batch_size) * 0.1) # wait for the envs to be ready
+        return envs, val_envs
+    elif "spider" in config.env.env_name.lower():
+        from agent_system.environments.env_package.spider import build_spider_envs, spider_projection
+        env_kwargs = {
+            "data_dir": config.env.spider.data_dir,
+            "split": config.env.spider.split,
+            "schema_max_chars": config.env.spider.get("schema_max_chars", 4000),
+            "rows_per_query": config.env.spider.get("rows_per_query", 10),
+        }
+        val_env_kwargs = dict(env_kwargs)
+        val_env_kwargs["split"] = config.env.spider.get("val_split", "validation")
+
+        _envs = build_spider_envs(
+            seed=config.env.seed,
+            env_num=config.data.train_batch_size,
+            group_n=group_n,
+            is_train=True,
+            env_kwargs=env_kwargs,
+            resources_per_worker=resources_per_worker,
+        )
+        _val_envs = build_spider_envs(
+            seed=config.env.seed + 1000,
+            env_num=config.data.val_batch_size,
+            group_n=1,
+            is_train=False,
+            env_kwargs=val_env_kwargs,
+            resources_per_worker=resources_per_worker,
+        )
+        projection_f = partial(spider_projection)
+        envs = SpiderEnvironmentManager(_envs, projection_f, config)
+        val_envs = SpiderEnvironmentManager(_val_envs, projection_f, config)
         return envs, val_envs
     elif "appworld" in config.env.env_name.lower():
         from agent_system.environments.env_package.appworld import build_appworld_envs, appworld_projection
