@@ -11,7 +11,8 @@ set -x
 ENGINE=${1:-vllm}
 export VLLM_ATTENTION_BACKEND=XFORMERS
 
-num_cpus_per_env_worker=0.1
+num_cpus_per_env_worker=0.05  # 14-core host: 128 envs * 0.1 leaves no room for
+                              # FSDP/vllm placement groups; 0.05 leaves 7.6 cores
 
 train_data_size=8       # A800-80GB + 120GB RAM: original verl-agent default
 val_data_size=64        # 64 dev questions per validation pass
