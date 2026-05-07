@@ -73,11 +73,11 @@ python3 -m verl.trainer.main_ppo \
     env.max_steps=6 \
     env.history_length=4 \
     env.rollout.n=$group_size \
-    env.spider.data_dir=$SPIDER_DATA_DIR \
-    env.spider.split=train \
-    env.spider.val_split=validation \
-    env.spider.schema_max_chars=4000 \
-    env.spider.rows_per_query=10 \
+    +env.spider.data_dir=$SPIDER_DATA_DIR \
+    +env.spider.split=train \
+    +env.spider.val_split=validation \
+    +env.spider.schema_max_chars=4000 \
+    +env.spider.rows_per_query=10 \
     env.resources_per_worker.num_cpus=$num_cpus_per_env_worker \
     trainer.critic_warmup=0 \
     trainer.logger=['console','wandb'] \
