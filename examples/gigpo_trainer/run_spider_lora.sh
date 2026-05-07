@@ -13,10 +13,12 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 
 num_cpus_per_env_worker=0.1
 
-train_data_size=8       # smaller batch for single A10
-val_data_size=64
+train_data_size=4       # 8 → 4: cuts train env workers 64 → 32
+val_data_size=16        # 64 → 16: cuts val workers 64 → 16
 group_size=8
 mode="mean_norm"        # binary reward → mean_norm avoids degenerate std-norm
+# Total env workers = train_data_size * group_size + val_data_size = 48
+# (was 128, OOMed 28GB host @ ~80MB/worker Python baseline)
 
 MODEL_PATH=${MODEL_PATH:-/mnt/data/models/Qwen3-4B-Instruct-2507}
 SPIDER_DATA_DIR=${SPIDER_DATA_DIR:-/mnt/data/datasets/spider/spider_data}
