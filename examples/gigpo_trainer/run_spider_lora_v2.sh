@@ -19,17 +19,16 @@ set -x
 ENGINE=${1:-vllm}
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN
 
-num_cpus_per_env_worker=0.02  # v1 used 0.05 with 128 workers (6.4 CPU); v2
-                              # has 32*8 + 64 = 320 workers, so 0.05 → 16 CPU
-                              # > 14 cores available. 0.02 → 6.4 CPU, leaves
-                              # 7.6 cores for FSDP/vllm placement groups.
+num_cpus_per_env_worker=0.04  # 192 workers × 0.04 = 7.7 CPU (≤ 14 cores)
+                              # Leaves ~6 cores for FSDP/vllm/Ray driver.
 
-train_data_size=32      # v1: 8 → 32 (4× batch)
+train_data_size=16      # v1: 8 → 16 (2× batch). 32 caused CPU OOM
+                         # (320 workers × 350 MB = 112 GB on 120 GB host).
 val_data_size=64
 group_size=8
 mode="mean_norm"
 # Total env workers = train_data_size * group_size + val_data_size
-#                   = 32 * 8 + 64 = 320
+#                   = 16 * 8 + 64 = 192 → ~67 GB peak (safe on 120 GB)
 
 MODEL_PATH=${MODEL_PATH:-/mnt/data/models/Qwen3-4B-Instruct-2507}
 SPIDER_DATA_DIR=${SPIDER_DATA_DIR:-/mnt/data/datasets/spider/spider_data}
@@ -55,7 +54,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.lora_alpha=32 \
     actor_rollout_ref.actor.optim.lr=3e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
-    actor_rollout_ref.actor.ppo_mini_batch_size=128 \
+    actor_rollout_ref.actor.ppo_mini_batch_size=64 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4 \
     actor_rollout_ref.actor.use_kl_loss=False \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
@@ -98,5 +97,5 @@ python3 -m verl.trainer.main_ppo \
     trainer.nnodes=1 \
     trainer.save_freq=20 \
     trainer.test_freq=10 \
-    trainer.total_epochs=220 \
+    trainer.total_epochs=438 \
     trainer.val_before_train=True $@
