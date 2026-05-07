@@ -19,7 +19,10 @@ set -x
 ENGINE=${1:-vllm}
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN
 
-num_cpus_per_env_worker=0.05
+num_cpus_per_env_worker=0.02  # v1 used 0.05 with 128 workers (6.4 CPU); v2
+                              # has 32*8 + 64 = 320 workers, so 0.05 → 16 CPU
+                              # > 14 cores available. 0.02 → 6.4 CPU, leaves
+                              # 7.6 cores for FSDP/vllm placement groups.
 
 train_data_size=32      # v1: 8 → 32 (4× batch)
 val_data_size=64
