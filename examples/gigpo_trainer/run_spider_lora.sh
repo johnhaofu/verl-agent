@@ -9,7 +9,7 @@
 
 set -x
 ENGINE=${1:-vllm}
-export VLLM_ATTENTION_BACKEND=XFORMERS
+export VLLM_ATTENTION_BACKEND=FLASH_ATTN  # was XFORMERS but xformers not installed; use flash-attn 2.8.3
 
 num_cpus_per_env_worker=0.05  # 14-core host: 128 envs * 0.1 leaves no room for
                               # FSDP/vllm placement groups; 0.05 leaves 7.6 cores
