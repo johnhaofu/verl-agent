@@ -147,11 +147,16 @@ def run_eval(
             s = states[i]
             action = actions[k]
             valid = valids[k]
-            if not valid or action == "":
+            # `valid` flag tracks <think> + ASCII-only quality (mirrors training
+            # invalid_action_penalty). Action execution should NOT depend on it
+            # — base model often produces prose reasoning without <think> tags
+            # but the SQL is still parseable and should run.
+            if action == "":
                 s["n_invalid"] += 1
                 obs_text, reward, done, info = envs[i].step("")
-                # Empty action → env returns "Error: action must be ..."
             else:
+                if not valid:
+                    s["n_invalid"] += 1  # track but still execute
                 obs_text, reward, done, info = envs[i].step(action)
 
             s["history"].append({"obs": s["current_obs"], "action": action})
