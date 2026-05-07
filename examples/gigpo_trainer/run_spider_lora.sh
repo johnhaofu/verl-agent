@@ -21,8 +21,9 @@ mode="mean_norm"        # binary reward → mean_norm avoids degenerate std-norm
 MODEL_PATH=${MODEL_PATH:-/mnt/data/models/Qwen3-4B-Instruct-2507}
 SPIDER_DATA_DIR=${SPIDER_DATA_DIR:-/mnt/data/datasets/spider/spider_data}
 
-# Data preprocess (just generates dummy parquet to indicate modality + size)
-python3 -m examples.data_preprocess.prepare \
+# Data preprocess: generate dummy parquet WITHOUT downloading from HuggingFace
+# (DSW often can't reach HF; geometry3k is only used for its row schema).
+python3 -m examples.data_preprocess.prepare_spider_dummy \
     --mode 'text' \
     --train_data_size $train_data_size \
     --val_data_size $((val_data_size * 2))
