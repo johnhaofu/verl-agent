@@ -35,9 +35,13 @@ class SpiderWorker:
     each Python process — that OOMs the host on 28GB RAM nodes).
     """
 
-    def __init__(self, seed: int, env_kwargs: dict, examples_ref):
+    def __init__(self, seed: int, env_kwargs: dict, examples_ref_box: dict):
+        """`examples_ref_box` is `{"ref": ObjectRef}` — boxed in a dict
+        to prevent Ray's auto-dereference from unpacking the example list
+        into separate positional args.
+        """
         import ray as _ray
-        examples = _ray.get(examples_ref)  # zero-copy from plasma store
+        examples = _ray.get(examples_ref_box["ref"])  # zero-copy from plasma store
         self.env = SpiderSQLEnv(
             data_dir=env_kwargs.get("data_dir", _DEFAULT_DATA_DIR),
             split=env_kwargs.get("split", "train"),
@@ -107,6 +111,10 @@ class SpiderMultiProcessEnv(gym.Env):
             self._env_kwargs.get("split", "train"),
         )
         examples_ref = ray.put(examples)
+        # Box the ObjectRef in a dict — Ray auto-dereferences positional
+        # ObjectRef args, and if the value is a list it unpacks them into
+        # separate positional params (Ray quirk). Boxing in dict prevents.
+        ref_box = {"ref": examples_ref}
 
         env_worker = ray.remote(**resources_per_worker)(SpiderWorker)
         self._workers = []
@@ -114,7 +122,7 @@ class SpiderMultiProcessEnv(gym.Env):
             worker = env_worker.remote(
                 seed + (i // self.group_n),
                 self._env_kwargs,
-                examples_ref,
+                ref_box,
             )
             self._workers.append(worker)
 
