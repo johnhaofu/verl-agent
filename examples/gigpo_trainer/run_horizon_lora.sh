@@ -33,6 +33,12 @@ MODEL_PATH=${MODEL_PATH:-/root/autodl-tmp/models/Qwen3-4B-Instruct-2507}
 HORIZON_DATA_DIR=${HORIZON_DATA_DIR:-/root/autodl-tmp/datasets/horizon}
 HORIZON_THEME_PATH=${HORIZON_THEME_PATH:-/root/autodl-tmp/datasets/horizon/theme}
 
+# Sitemuse API config — picked up by SitemuseValidator via env vars
+export SITEMUSE_API=${SITEMUSE_API:-https://api.sitemuse.ai/muse/admin/liquid/theme/files/upsert}
+export SITEMUSE_TOKEN=${SITEMUSE_TOKEN:-GqBOT5cvQk3S69e7KL8tjhuC1az20Hsi}
+export SITEMUSE_SHOP_ID=${SITEMUSE_SHOP_ID:-cmovac01y0002r601h2f2euqc}
+export HORIZON_THEME_ID=${HORIZON_THEME_ID:-gid://shopify/OnlineStoreTheme/156650045637}
+
 python3 -m examples.data_preprocess.prepare_spider_dummy \
     --mode 'text' \
     --train_data_size $train_data_size \
