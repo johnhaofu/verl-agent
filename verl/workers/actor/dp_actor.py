@@ -326,6 +326,8 @@ class DataParallelPPOActor(BasePPOActor):
             select_keys.append("loss_mask")
         if self.config.use_kl_loss:
             select_keys.append("ref_log_prob")
+        if self.config.get("distill_alpha", 0.0) > 0.0 and "is_winner" in data.batch.keys():
+            select_keys.append("is_winner")
         batch = data.select(batch_keys=select_keys).batch
         has_multi_modal_inputs = "multi_modal_inputs" in data.non_tensor_batch.keys()
 
