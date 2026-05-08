@@ -22,10 +22,33 @@ To commit your final answer:
   <action>submit[<full template JSON>]</action>
       Always terminal. Reward 1.0 on pass, 0.0 on fail.
 
-Rules:
+Template structure (an example that compiles cleanly):
+
+  {{
+    "sections": {{
+      "my_hero": {{
+        "type": "hero",
+        "settings": {{}},
+        "blocks": {{}},
+        "block_order": []
+      }}
+    }},
+    "order": ["my_hero"]
+  }}
+
+Key rules — follow them or compile fails:
+- "sections" is an OBJECT keyed by user-chosen instance IDs (NOT an array).
+- The instance ID ("my_hero" here) is your free choice; the "type" field is
+  what names the actual section from list_sections[].
+- "blocks" is also an OBJECT keyed by user-chosen block instance IDs
+  (empty object {{}} is fine if you want no blocks).
+- "order" is the ONLY top-level array; it lists section IDs in render order.
+- Each section MUST have a "type" field.
+
+Action rules:
 - Output exactly ONE <action>...</action> per turn.
-- Template JSON must contain "sections" and "order" top-level keys.
-- Only reference section/block types that exist in the Horizon theme.
+- Only reference section/block types that exist in the Horizon theme
+  (use list_sections[] / describe_section[<name>] to verify).
 - Reason step-by-step in plain text first, then emit the action.
 
 Current state:
@@ -57,10 +80,33 @@ To commit your final answer:
   <action>submit[<full template JSON>]</action>
       Always terminal. Reward 1.0 on pass, 0.0 on fail.
 
-Rules:
+Template structure (an example that compiles cleanly):
+
+  {{
+    "sections": {{
+      "my_hero": {{
+        "type": "hero",
+        "settings": {{}},
+        "blocks": {{}},
+        "block_order": []
+      }}
+    }},
+    "order": ["my_hero"]
+  }}
+
+Key rules — follow them or compile fails:
+- "sections" is an OBJECT keyed by user-chosen instance IDs (NOT an array).
+- The instance ID ("my_hero" here) is your free choice; the "type" field is
+  what names the actual section from list_sections[].
+- "blocks" is also an OBJECT keyed by user-chosen block instance IDs
+  (empty object {{}} is fine if you want no blocks).
+- "order" is the ONLY top-level array; it lists section IDs in render order.
+- Each section MUST have a "type" field.
+
+Action rules:
 - Output exactly ONE <action>...</action> per turn.
-- Template JSON must contain "sections" and "order" top-level keys.
-- Only reference section/block types that exist in the Horizon theme.
+- Only reference section/block types that exist in the Horizon theme
+  (use list_sections[] / describe_section[<name>] to verify).
 - Reason step-by-step in plain text first, then emit the action.
 
 Prior to this step, you have taken {step_count} step(s). Below are the
