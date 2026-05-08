@@ -604,6 +604,93 @@ class SpiderEnvironmentManager(EnvironmentManagerBase):
                 return
 
 
+class HorizonEnvironmentManager(EnvironmentManagerBase):
+    """Manager for Horizon Liquid template-generation agent."""
+
+    def __init__(self, envs, projection_f, config):
+        self.memory = SimpleMemory()
+        super().__init__(envs, projection_f, config)
+
+    def reset(self, kwargs) -> Tuple[Dict[str, Any], List[Dict]]:
+        text_obs, infos = self.envs.reset()
+        self.tasks = text_obs.copy()
+        self.pre_text_obs = text_obs.copy()
+        self.memory.reset(batch_size=len(text_obs))
+
+        observations = {
+            "text": self.build_text_obs(text_obs, init=True),
+            "image": None,
+            "anchor": text_obs.copy(),
+        }
+        return observations, infos
+
+    def step(self, text_actions: List[str]):
+        actions, valids = self.projection_f(text_actions)
+        next_obs, rewards, dones, infos = self.envs.step(actions)
+
+        self.memory.store({"text_obs": self.pre_text_obs, "action": actions})
+        self.pre_text_obs = next_obs
+
+        next_observations = {
+            "text": self.build_text_obs(next_obs, init=False),
+            "image": None,
+            "anchor": next_obs.copy(),
+        }
+        for i, info in enumerate(infos):
+            info["is_action_valid"] = to_numpy(valids[i])
+
+        rewards = to_numpy(rewards)
+        dones = to_numpy(dones)
+        return next_observations, rewards, dones, infos
+
+    def build_text_obs(
+        self,
+        text_obs: List[str],
+        init: bool = False,
+    ) -> List[str]:
+        postprocess_text_obs: List[str] = []
+
+        if not init and self.config.env.history_length > 0:
+            memory_contexts, valid_lens = self.memory.fetch(
+                self.config.env.history_length,
+                obs_key="text_obs",
+                action_key="action",
+            )
+
+        for i in range(len(text_obs)):
+            if init or self.config.env.history_length <= 0:
+                obs = HORIZON_TEMPLATE_NO_HIS.format(
+                    current_observation=text_obs[i],
+                )
+            else:
+                obs = HORIZON_TEMPLATE.format(
+                    step_count=len(self.memory[i]),
+                    history_length=valid_lens[i],
+                    action_history=memory_contexts[i],
+                    current_step=len(self.memory[i]) + 1,
+                    current_observation=text_obs[i],
+                )
+                if len(obs) > 13000:
+                    obs = HORIZON_TEMPLATE_NO_HIS.format(
+                        current_observation=text_obs[i],
+                    )
+
+            postprocess_text_obs.append(obs)
+
+        return postprocess_text_obs
+
+    def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
+        for i in reversed(range(len(total_batch_list[batch_idx]))):
+            batch_item = total_batch_list[batch_idx][i]
+            if batch_item["active_masks"]:
+                info = total_infos[batch_idx][i]
+                won_value = float(info.get("won", False))
+                score_value = float(info.get("task_score", 0.0))
+                success["success_rate"].append(won_value)
+                success["horizon_compile_score"].append(score_value)
+                return
+
+
 class AppWorldEnvironmentManager(EnvironmentManagerBase):
     def __init__(self, envs, projection_f, config):
         self.memory = SimpleMemory()
@@ -803,6 +890,38 @@ def make_envs(config):
         projection_f = partial(spider_projection)
         envs = SpiderEnvironmentManager(_envs, projection_f, config)
         val_envs = SpiderEnvironmentManager(_val_envs, projection_f, config)
+        return envs, val_envs
+    elif "horizon" in config.env.env_name.lower():
+        from agent_system.environments.env_package.horizon import build_horizon_envs, horizon_projection
+        env_kwargs = {
+            "data_dir": config.env.horizon.data_dir,
+            "theme_path": config.env.horizon.theme_path,
+            "split": config.env.horizon.get("split", "train"),
+            "max_steps": config.env.horizon.get("max_steps", 6),
+            "invalid_action_penalty": config.env.horizon.get("invalid_action_penalty", -0.1),
+        }
+        val_env_kwargs = dict(env_kwargs)
+        val_env_kwargs["split"] = config.env.horizon.get("val_split", "val")
+
+        _envs = build_horizon_envs(
+            seed=config.env.seed,
+            env_num=config.data.train_batch_size,
+            group_n=group_n,
+            is_train=True,
+            env_kwargs=env_kwargs,
+            resources_per_worker=resources_per_worker,
+        )
+        _val_envs = build_horizon_envs(
+            seed=config.env.seed + 1000,
+            env_num=config.data.val_batch_size,
+            group_n=1,
+            is_train=False,
+            env_kwargs=val_env_kwargs,
+            resources_per_worker=resources_per_worker,
+        )
+        projection_f = partial(horizon_projection)
+        envs = HorizonEnvironmentManager(_envs, projection_f, config)
+        val_envs = HorizonEnvironmentManager(_val_envs, projection_f, config)
         return envs, val_envs
     elif "appworld" in config.env.env_name.lower():
         from agent_system.environments.env_package.appworld import build_appworld_envs, appworld_projection
