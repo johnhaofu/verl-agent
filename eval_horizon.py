@@ -219,9 +219,13 @@ def main():
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--max_tasks", type=int, default=None,
                         help="Cap tasks per dataset for quick smoke test")
-    parser.add_argument("--temperature", type=float, default=0.4,
-                        help="0.4 matches training val_kwargs; 0 for greedy")
-    parser.add_argument("--max_new_tokens", type=int, default=2048)
+    parser.add_argument("--temperature", type=float, default=0.7,
+                        help="Qwen3-4B-Instruct-2507 best-practice (0.7); use 0 for greedy")
+    parser.add_argument("--top_p", type=float, default=0.8)
+    parser.add_argument("--top_k", type=int, default=20)
+    parser.add_argument("--min_p", type=float, default=0.0)
+    parser.add_argument("--max_new_tokens", type=int, default=4096,
+                        help="Qwen3 supports 16k but Horizon templates rarely exceed 4k")
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.5)
     args = parser.parse_args()
 
@@ -250,7 +254,9 @@ def main():
 
     sampling_params = SamplingParams(
         temperature=args.temperature,
-        top_p=1.0,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        min_p=args.min_p,
         max_tokens=args.max_new_tokens,
         stop=["</action>", "<|im_end|>"],
         include_stop_str_in_output=True,
