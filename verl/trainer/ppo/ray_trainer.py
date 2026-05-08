@@ -1220,11 +1220,13 @@ class RayPPOTrainer:
                         # action penalties (-0.1 each). Failed episodes top out at 0.2
                         # (with OPD step credits).
                         distill_alpha_cfg = self.config.actor_rollout_ref.actor.get("distill_alpha", 0.0)
+                        print(f"[DISTILL TRAINER DEBUG] distill_alpha_cfg={distill_alpha_cfg}", flush=True)
                         if distill_alpha_cfg > 0.0:
                             episode_rewards = batch.batch["token_level_rewards"].sum(dim=-1)  # (bsz,)
                             is_winner = (episode_rewards >= 0.5).float()                       # (bsz,)
                             response_len = batch.batch["responses"].size(1)
                             batch.batch["is_winner"] = is_winner.unsqueeze(-1).expand(-1, response_len).contiguous()
+                            print(f"[DISTILL TRAINER DEBUG] is_winner set in batch.batch, winners={int(is_winner.sum().item())}/{is_winner.numel()}", flush=True)
 
                         # compute advantages, executed on the driver process
 
