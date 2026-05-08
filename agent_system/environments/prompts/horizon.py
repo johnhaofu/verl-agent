@@ -9,9 +9,9 @@ You may explore the theme before submitting:
   <action>list_sections[]</action>
       Returns the names of available sections.
   <action>describe_section[<name>]</action>
-      Returns the {% schema %} block of a named section.
+      Returns the {{% schema %}} block of a named section.
   <action>describe_block[<name>]</action>
-      Returns the {% schema %} block of a named block.
+      Returns the {{% schema %}} block of a named block.
 
 To compile a draft and read errors:
   <action>fix[<full template JSON>]</action>
@@ -45,9 +45,9 @@ You may explore the theme before submitting:
   <action>list_sections[]</action>
       Returns the names of available sections.
   <action>describe_section[<name>]</action>
-      Returns the {% schema %} block of a named section.
+      Returns the {{% schema %}} block of a named section.
   <action>describe_block[<name>]</action>
-      Returns the {% schema %} block of a named block.
+      Returns the {{% schema %}} block of a named block.
 
 To compile a draft and read errors:
   <action>fix[<full template JSON>]</action>
