@@ -18,6 +18,8 @@
 set -x
 ENGINE=${1:-vllm}
 export VLLM_ATTENTION_BACKEND=FLASH_ATTN
+# Ensure base conda python is on PATH (has ray/vllm/torch installed)
+export PATH=/root/miniconda3/bin:$PATH
 
 num_cpus_per_env_worker=0.04  # 64 workers × 0.04 ≈ 2.6 CPU (≤ 14 cores)
                               # Smaller than Spider because each Horizon
@@ -39,12 +41,12 @@ export SITEMUSE_TOKEN=${SITEMUSE_TOKEN:-GqBOT5cvQk3S69e7KL8tjhuC1az20Hsi}
 export SITEMUSE_SHOP_ID=${SITEMUSE_SHOP_ID:-cmovac01y0002r601h2f2euqc}
 export HORIZON_THEME_ID=${HORIZON_THEME_ID:-gid://shopify/OnlineStoreTheme/156650045637}
 
-python3 -m examples.data_preprocess.prepare_spider_dummy \
+python -m examples.data_preprocess.prepare_spider_dummy \
     --mode 'text' \
     --train_data_size $train_data_size \
     --val_data_size $((val_data_size * 2))
 
-python3 -m verl.trainer.main_ppo \
+python -m verl.trainer.main_ppo \
     algorithm.adv_estimator=gigpo \
     data.train_files=$HOME/data/verl-agent/text/train.parquet \
     data.val_files=$HOME/data/verl-agent/text/test.parquet \
