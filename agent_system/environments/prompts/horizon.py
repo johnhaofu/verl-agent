@@ -26,14 +26,13 @@ Rules:
 - Output exactly ONE <action>...</action> per turn.
 - Template JSON must contain "sections" and "order" top-level keys.
 - Only reference section/block types that exist in the Horizon theme.
-- Keep your reasoning inside <think>...</think> before the action.
+- Reason step-by-step in plain text first, then emit the action.
 
 Current state:
 {current_observation}
 
-Now reason step-by-step about what you need to discover or commit, then
-emit one action. Wrap reasoning in <think>...</think> and the action in
-<action>...</action>.
+Now reason step-by-step in plain text about what you need to discover or
+commit, then emit one action wrapped in <action>...</action>.
 """
 
 HORIZON_TEMPLATE = """
@@ -62,7 +61,7 @@ Rules:
 - Output exactly ONE <action>...</action> per turn.
 - Template JSON must contain "sections" and "order" top-level keys.
 - Only reference section/block types that exist in the Horizon theme.
-- Keep your reasoning inside <think>...</think> before the action.
+- Reason step-by-step in plain text first, then emit the action.
 
 Prior to this step, you have taken {step_count} step(s). Below are the
 most recent {history_length} observations and the corresponding actions
@@ -72,7 +71,7 @@ you took:
 You are now at step {current_step}. Your current observation is:
 {current_observation}
 
-Now reason step-by-step about what you've learned and what to do next.
-Wrap your reasoning in <think>...</think> and your chosen action in
+Now reason step-by-step in plain text about what you've learned and
+what to do next, then emit your chosen action wrapped in
 <action>...</action>.
 """
