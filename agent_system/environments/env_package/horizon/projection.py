@@ -19,7 +19,6 @@ import re
 from typing import List
 
 _ACTION_RE = re.compile(r"<action>(.*?)</action>", re.DOTALL)
-_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 _VERB_RE = re.compile(
     r"^(list_sections|describe_section|describe_block|submit|fix)\[(.*)\]\s*$",
     re.DOTALL,
@@ -30,7 +29,13 @@ def horizon_projection(actions: List[str]):
     """Parse ``<action>verb[arg]</action>`` for the Horizon template agent.
 
     Returns ``(parsed_actions, valids)`` where ``valids[i] == 1`` iff the
-    output contains a ``<think>`` tag and a parseable ``<action>``.
+    output contains a parseable ``<action>verb[arg]</action>``.
+
+    The Spider/webshop projections additionally required ``<think>``, but
+    Qwen3-4B-Instruct-2507 emits ``<tool_call>`` reasoning instead — that
+    requirement caused 100% of actions to be flagged invalid in v1
+    training, stacking ``-invalid_action_penalty`` on every turn and
+    polluting the reward signal.
     """
     valids = [0] * len(actions)
     parsed: List[str] = []
@@ -50,9 +55,5 @@ def horizon_projection(actions: List[str]):
 
         parsed.append(inner)
         valids[i] = 1
-
-        # Mirror webshop / spider: require <think> for full credit
-        if not _THINK_RE.search(original):
-            valids[i] = 0
 
     return parsed, valids
