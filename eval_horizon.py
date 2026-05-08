@@ -219,13 +219,16 @@ def main():
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--max_tasks", type=int, default=None,
                         help="Cap tasks per dataset for quick smoke test")
-    parser.add_argument("--temperature", type=float, default=0.7,
-                        help="Qwen3-4B-Instruct-2507 best-practice (0.7); use 0 for greedy")
-    parser.add_argument("--top_p", type=float, default=0.8)
-    parser.add_argument("--top_k", type=int, default=20)
+    # Default sampling matches training val_kwargs (run_horizon_lora.sh)
+    # so eval pass@1 numbers are directly comparable with the val/success_rate
+    # logged at step 0 / 10 / 20 / ... during training.
+    parser.add_argument("--temperature", type=float, default=0.4,
+                        help="0.4 matches training val_kwargs.temperature")
+    parser.add_argument("--top_p", type=float, default=1.0)
+    parser.add_argument("--top_k", type=int, default=-1)
     parser.add_argument("--min_p", type=float, default=0.0)
-    parser.add_argument("--max_new_tokens", type=int, default=4096,
-                        help="Qwen3 supports 16k but Horizon templates rarely exceed 4k")
+    parser.add_argument("--max_new_tokens", type=int, default=2048,
+                        help="Matches training data.max_response_length=2048")
     parser.add_argument("--gpu_memory_utilization", type=float, default=0.5)
     args = parser.parse_args()
 
