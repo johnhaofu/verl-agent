@@ -69,6 +69,7 @@ class HorizonAgentEnv:
         invalid_action_penalty: float = -0.1,
         api_url: Optional[str] = None,
         api_token: Optional[str] = None,
+        api_shop_id: Optional[str] = None,
         api_theme_id: Optional[str] = None,
         api_timeout: int = 30,
     ) -> None:
@@ -93,6 +94,8 @@ class HorizonAgentEnv:
             validator_kwargs["api_url"] = api_url
         if api_token is not None:
             validator_kwargs["token"] = api_token
+        if api_shop_id is not None:
+            validator_kwargs["shop_id"] = api_shop_id
         if api_theme_id is not None:
             validator_kwargs["theme_id"] = api_theme_id
         self.validator = SitemuseValidator(**validator_kwargs)
