@@ -26,6 +26,7 @@ except ImportError:
     # Fallback: import from compiler-reward-agent-rl checkout
     import sys
     _possible = [
+        "/root/autodl-tmp/datasets/horizon/lib",
         "/root/autodl-tmp/compiler-reward-agent-rl/environments",
         "/tmp/compiler-reward-agent-rl/environments",
     ]
