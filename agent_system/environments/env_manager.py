@@ -899,6 +899,8 @@ def make_envs(config):
             "split": config.env.horizon.get("split", "train"),
             "max_steps": config.env.horizon.get("max_steps", 6),
             "invalid_action_penalty": config.env.horizon.get("invalid_action_penalty", -0.1),
+            "opd_step_reward": config.env.horizon.get("opd_step_reward", 0.0),
+            "opd_max_credited_validates": config.env.horizon.get("opd_max_credited_validates", 2),
         }
         val_env_kwargs = dict(env_kwargs)
         val_env_kwargs["split"] = config.env.horizon.get("val_split", "val")

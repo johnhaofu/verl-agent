@@ -48,6 +48,8 @@ class HorizonWorker:
             prompts=prompts,
             max_steps=env_kwargs.get("max_steps", 6),
             invalid_action_penalty=env_kwargs.get("invalid_action_penalty", -0.1),
+            opd_step_reward=env_kwargs.get("opd_step_reward", 0.0),
+            opd_max_credited_validates=env_kwargs.get("opd_max_credited_validates", 2),
             api_url=env_kwargs.get("api_url"),
             api_token=env_kwargs.get("api_token"),
             api_shop_id=env_kwargs.get("api_shop_id"),

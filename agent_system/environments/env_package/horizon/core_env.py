@@ -67,6 +67,8 @@ class HorizonAgentEnv:
         prompts: list[dict] | None = None,
         max_steps: int = 6,
         invalid_action_penalty: float = -0.1,
+        opd_step_reward: float = 0.0,
+        opd_max_credited_validates: int = 2,
         api_url: Optional[str] = None,
         api_token: Optional[str] = None,
         api_shop_id: Optional[str] = None,
@@ -88,6 +90,10 @@ class HorizonAgentEnv:
         self._prompts = prompts
         self.max_steps = max_steps
         self.invalid_action_penalty = invalid_action_penalty
+        # Compiler-OPD: small step reward for first K fix calls
+        # (paper §3.1 — "validate" action densifies signal). 0.0 = OPD off.
+        self.opd_step_reward = opd_step_reward
+        self.opd_max_credited_validates = opd_max_credited_validates
 
         validator_kwargs: dict[str, Any] = {"timeout": api_timeout}
         if api_url is not None:
@@ -132,6 +138,7 @@ class HorizonAgentEnv:
         self._steps_done = 0
         self._finished = False
         self._last_won = False
+        self._fix_count = 0  # OPD: count of fix/submit "validate-like" calls
 
         obs_text = (
             f"Task: Generate a Shopify Horizon theme template.\n"
@@ -258,6 +265,17 @@ class HorizonAgentEnv:
         # if no slash is given, but we pass the explicit path for clarity.
         file_path = f"templates/{self._template_type}.json"
         result = self.validator.validate(file_path, template_json)
+
+        # Compiler-OPD: +step_reward for first K validate-like calls.
+        # Both fix and submit count as "validate" since both hit the API.
+        # Cap prevents the spam-validate hack (paper §3.1).
+        self._fix_count += 1
+        opd_step = (
+            self.opd_step_reward
+            if self._fix_count <= self.opd_max_credited_validates
+            else 0.0
+        )
+
         if result.all_passed:
             obs = "Template compiled successfully. ✓"
             self._finished = True
@@ -265,8 +283,10 @@ class HorizonAgentEnv:
             info["won"] = True
             info["task_score"] = 1.0
             info["validation"] = result.to_reward_dict()
+            info["opd_step_reward"] = opd_step
             self._last_obs = obs
-            return obs, 1.0, True, info
+            # Terminal pass: 1.0 + OPD bonus this turn (capped)
+            return obs, 1.0 + opd_step, True, info
 
         err = result.get_error_message()
         obs = (
@@ -277,16 +297,18 @@ class HorizonAgentEnv:
         )
         info["validation"] = result.to_reward_dict()
         info["error_message"] = err
+        info["opd_step_reward"] = opd_step
 
         if terminal:
             self._finished = True
             self._last_won = False
             self._last_obs = obs
-            return obs, 0.0, True, info
+            # Terminal fail: only OPD step credit (no terminal reward)
+            return obs, opd_step, True, info
 
-        # Non-terminal fail (fix[] within budget)
+        # Non-terminal fail (fix[] within budget): just OPD step credit
         self._last_obs = obs
-        return obs, 0.0, False, info
+        return obs, opd_step, False, info
 
     def _invalid_action(self, timeout: bool, info: dict):
         obs = (
