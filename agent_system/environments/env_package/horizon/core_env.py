@@ -17,23 +17,21 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-# Re-use the underlying compile env from the original repo. Path is
-# expected to be on PYTHONPATH (we ship horizon_env.py alongside the
-# theme repo on disk and add to sys.path).
-try:
-    from horizon_env import HorizonEnvironment, ValidationResult  # type: ignore
-except ImportError:
-    # Fallback: import from compiler-reward-agent-rl checkout
-    import sys
-    _possible = [
-        "/root/autodl-tmp/datasets/horizon/lib",
-        "/root/autodl-tmp/compiler-reward-agent-rl/environments",
-        "/tmp/compiler-reward-agent-rl/environments",
-    ]
-    for p in _possible:
-        if Path(p).exists() and p not in sys.path:
-            sys.path.insert(0, p)
-    from horizon_env import HorizonEnvironment, ValidationResult  # type: ignore
+# HorizonEnvironment used only for local theme metadata (sections list,
+# schema previews). Real compile validation goes through SitemuseValidator
+# (Shopify themeFilesUpsert GraphQL) — that's the actual reward signal.
+import sys
+_possible_lib_paths = [
+    "/root/autodl-tmp/datasets/horizon/lib",
+    "/root/autodl-tmp/compiler-reward-agent-rl/environments",
+    "/tmp/compiler-reward-agent-rl/environments",
+]
+for _p in _possible_lib_paths:
+    if Path(_p).exists() and _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from horizon_env import HorizonEnvironment  # type: ignore  # local theme reader
+from sitemuse_validator import SitemuseValidator  # type: ignore  # API validator
 
 
 _VERB_RE = re.compile(
@@ -69,9 +67,17 @@ class HorizonAgentEnv:
         prompts: list[dict] | None = None,
         max_steps: int = 6,
         invalid_action_penalty: float = -0.1,
+        api_url: Optional[str] = None,
+        api_token: Optional[str] = None,
+        api_theme_id: Optional[str] = None,
+        api_timeout: int = 30,
     ) -> None:
         """If ``prompts`` is provided, use it directly (skips JSON load).
         Pre-loaded list shared across Ray workers via plasma object store.
+
+        Validation is performed via SitemuseValidator (Shopify
+        themeFilesUpsert GraphQL). HorizonEnvironment is only used for
+        local theme metadata (list_sections / describe_section).
         """
         self.base = HorizonEnvironment(horizon_path)
         if prompts is None:
@@ -81,6 +87,15 @@ class HorizonAgentEnv:
         self._prompts = prompts
         self.max_steps = max_steps
         self.invalid_action_penalty = invalid_action_penalty
+
+        validator_kwargs: dict[str, Any] = {"timeout": api_timeout}
+        if api_url is not None:
+            validator_kwargs["api_url"] = api_url
+        if api_token is not None:
+            validator_kwargs["token"] = api_token
+        if api_theme_id is not None:
+            validator_kwargs["theme_id"] = api_theme_id
+        self.validator = SitemuseValidator(**validator_kwargs)
 
         self._current: Optional[dict] = None
         self._template_type: str = ""
@@ -235,7 +250,11 @@ class HorizonAgentEnv:
         return obs, 0.0, timeout, info
 
     def _submit(self, template_json: str, terminal: bool, info: dict):
-        result: ValidationResult = self.base.validate(self._template_type, template_json)
+        # Sitemuse expects "templates/<type>.json" filename; the
+        # validator's _call_upsert_api handles the prefix internally
+        # if no slash is given, but we pass the explicit path for clarity.
+        file_path = f"templates/{self._template_type}.json"
+        result = self.validator.validate(file_path, template_json)
         if result.all_passed:
             obs = "Template compiled successfully. ✓"
             self._finished = True

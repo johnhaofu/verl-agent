@@ -48,6 +48,10 @@ class HorizonWorker:
             prompts=prompts,
             max_steps=env_kwargs.get("max_steps", 6),
             invalid_action_penalty=env_kwargs.get("invalid_action_penalty", -0.1),
+            api_url=env_kwargs.get("api_url"),
+            api_token=env_kwargs.get("api_token"),
+            api_theme_id=env_kwargs.get("api_theme_id"),
+            api_timeout=env_kwargs.get("api_timeout", 30),
         )
         self._n_examples = self.env.n_examples
 
