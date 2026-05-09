@@ -1,26 +1,32 @@
 #!/bin/bash
-# Horizon v3-dfg: GiGPO + LoRA + Decidable-Fraction-Gated SFT distillation.
+# Horizon v3-dfg: GiGPO + LoRA + Group-Null-Advantage SFT gating.
 #
-# DFG-RL idea:
-#   At each step, compute decidable fraction
-#       D = |groups with at least 1 pass AND at least 1 fail| / |all groups|
-#   D measures how much actual GRPO/GiGPO advantage signal exists in the batch.
+# DFG-RL (group-local form) -- threshold-free.
 #
-#   - D < threshold_low  (sparse)   : turn SFT-on-winners ON for this step
-#                                     (compensate for vanishing PG gradient)
-#   - D in [low, high]   (healthy)  : pure GiGPO, SFT OFF (avoid forward-KL
-#                                     mode-covering damage to pretraining)
-#   - D > threshold_high (saturated): log warning; future work: curriculum
+# Decision rule (single line, no hyperparameters):
+#     winner_mask[i] = ( i's group has all trajectories passing )
+#
+# Reasoning:
+#   - In a *mixed* group (some pass, some fail), GRPO advantage is non-zero
+#     for every trajectory; pure RL is doing its job. SFT here would compete.
+#   - In an *all-pass* group, σ_group = 0 -> GRPO advantage = 0 for every
+#     trajectory; RL contributes nothing. Apply SFT to all winners (= the
+#     whole group): this is exactly the regime where distillation does no
+#     harm to RL's gradient direction.
+#   - In an *all-fail* group, σ_group = 0 too, but there are no winners to
+#     distill from -> nothing to do.
 #
 # Why this beats v2-distill (which lost -22.7pp on OOD eval_fixed):
-#   v2-distill ran SFT-on-winners always. With base v1 success ~73% on Horizon,
-#   D was already ~0.3-0.5 (healthy) most of the training, so the always-on SFT
-#   loss was adding forward-KL pressure when the policy didn't need it. RL's
-#   Razor (Shenfeld et al., 2025) predicts forward-KL accumulation breaks
-#   pretraining knowledge -> OOD drop.
+#   v2-distill ran SFT-on-winners on EVERY winner regardless of group state.
+#   In healthy mixed groups that meant pulling the policy towards a forward-KL
+#   target while RL was already producing a meaningful gradient -- accumulating
+#   pretraining-degradation pressure (RL's Razor; Shenfeld et al., 2025).
+#   DFG-RL only fires SFT in groups where RL is structurally silent, so the
+#   two losses never compete.
 #
-#   DFG-RL only fires SFT when D is genuinely sparse (early sparse-reward
-#   regime, or temporary dip), and otherwise lets pure RL preserve OOD.
+# Why group-local is more elegant than batch-D thresholding:
+#   No magic numbers. The criterion (σ_group = 0) is the exact condition under
+#   which GRPO/GiGPO loses its gradient. We act precisely where it fails.
 
 set -x
 ENGINE=${1:-vllm}
@@ -46,8 +52,6 @@ export HORIZON_THEME_ID=${HORIZON_THEME_ID:-gid://shopify/OnlineStoreTheme/15665
 # Setting >0 is required for the actor to compile the SFT branch; whether it
 # actually fires per-step is gated by DFG.
 DISTILL_ALPHA=${DISTILL_ALPHA:-0.1}
-DFG_LOW=${DFG_LOW:-0.30}
-DFG_HIGH=${DFG_HIGH:-0.70}
 
 python -m examples.data_preprocess.prepare_spider_dummy \
     --mode 'text' \
@@ -96,8 +100,6 @@ python -m verl.trainer.main_ppo \
     algorithm.gigpo.step_advantage_w=1.0 \
     algorithm.gigpo.mode=$mode \
     algorithm.dfg.enable=True \
-    algorithm.dfg.threshold_low=$DFG_LOW \
-    algorithm.dfg.threshold_high=$DFG_HIGH \
     env.env_name=Horizon \
     env.seed=0 \
     env.max_steps=6 \
