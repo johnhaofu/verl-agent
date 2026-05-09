@@ -421,9 +421,7 @@ class DataParallelPPOActor(BasePPOActor):
                     # Acts as a "pull toward known-good completions" gradient that does not
                     # rely on hand-designed step rewards. alpha=0 disables (default).
                     distill_alpha = self.config.get("distill_alpha", 0.0)
-                    _has_winner_in_data = "is_winner" in data
-                    print(f"[DISTILL DEBUG] alpha={distill_alpha} has_winner_key={_has_winner_in_data} data_keys_sample={list(data.keys())[:15]}", flush=True)
-                    if distill_alpha > 0.0 and _has_winner_in_data:
+                    if distill_alpha > 0.0 and "is_winner" in data:
                         winner_mask = data["is_winner"]  # (bsz, response_len)
                         sft_token_count = (winner_mask * response_mask).sum().clamp(min=1.0)
                         sft_loss = -((log_prob * winner_mask * response_mask).sum()) / sft_token_count
@@ -434,7 +432,6 @@ class DataParallelPPOActor(BasePPOActor):
                             "actor/winner_ratio": (winner_mask.sum(dim=-1) > 0).float().mean().detach().item(),
                         }
                         append_to_dict(metrics, sft_metrics)
-                        print(f"[DISTILL DEBUG] APPLIED: sft_loss={sft_loss.item():.4f} winner_count={(winner_mask.sum(dim=-1) > 0).sum().item()}/{winner_mask.size(0)}", flush=True)
 
                     if self.config.use_kl_loss:
                         ref_log_prob = data["ref_log_prob"]

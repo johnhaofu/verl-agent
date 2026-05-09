@@ -149,6 +149,11 @@ def compute_gigpo_outcome_advantage(token_level_rewards: torch.Tensor,
                                    ):
     """
     Compute the advantages for GiGPO (https://arxiv.org/abs/2505.10978).
+
+    Returns:
+        scores: combined advantage tensor (episode_adv + w * step_adv)
+        scores: same (returned twice to match the GAE-style interface)
+        essa_diag: dict of inner-group diagnostics for logging.
     """
     if mode == "mean_std_norm":
         remove_std = False
@@ -156,10 +161,10 @@ def compute_gigpo_outcome_advantage(token_level_rewards: torch.Tensor,
         remove_std = True
     else:
         raise ValueError(f"Unknown mode: {mode}")
-    
+
     # Compute episode relative advantages (Eq. 3 in the paper).
     episode_advantages = episode_norm_reward(token_level_rewards, response_mask, index, traj_index, epsilon, remove_std)
-    
+
     # Anchor state grouping (Eq. 6 in the paper).
     step_group_uids = build_step_group(anchor_obs, index, enable_similarity, similarity_thresh)
 
@@ -168,7 +173,72 @@ def compute_gigpo_outcome_advantage(token_level_rewards: torch.Tensor,
 
     # Compute joint advantages (Eq. 8 in the paper).
     scores = episode_advantages + step_advantage_w * step_advantages
-    return scores, scores
+
+    essa_diag = _compute_essa_diag(
+        episode_advantages=episode_advantages,
+        step_advantages=step_advantages,
+        response_mask=response_mask,
+        step_group_uids=step_group_uids,
+        step_advantage_w=step_advantage_w,
+    )
+    return scores, scores, essa_diag
+
+
+def _compute_essa_diag(
+    episode_advantages: torch.Tensor,
+    step_advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    step_group_uids: np.array,
+    step_advantage_w: float,
+) -> dict:
+    """ESSA / inner-group diagnostics. Returns flat dict of float metrics:
+
+        essa/episode_adv_mean_abs    : mean(|episode_adv|) over masked tokens
+        essa/step_adv_mean_abs       : mean(|step_adv|) over masked tokens
+        essa/step_adv_share          : mean(|w*step_adv|) / mean(|ep|+|w*step|)
+                                       (per-token, then masked-mean) — fraction
+                                       of advantage magnitude coming from inner.
+        essa/cluster_size_mean       : mean cluster size (for cross-check)
+        essa/cluster_size_p50        : median cluster size
+        essa/cluster_size_p90        : 90th percentile cluster size
+        essa/cluster_size_gt1_ratio  : fraction of clusters with size > 1
+        essa/n_clusters              : number of distinct anchor states
+    """
+    with torch.no_grad():
+        mask = response_mask.float()
+        denom = mask.sum().clamp(min=1.0)
+        ep_abs = episode_advantages.abs() * mask
+        step_abs = step_advantages.abs() * mask
+        ep_mean = (ep_abs.sum() / denom).item()
+        step_mean = (step_abs.sum() / denom).item()
+        # share per-token, then masked-mean
+        w_step_abs = (step_advantage_w * step_advantages).abs() * mask
+        share_per_tok = w_step_abs / (ep_abs + w_step_abs + 1e-9)
+        share_mean = (share_per_tok.sum() / denom).item()
+
+    # Cluster size stats from step_group_uids (np.array of strings).
+    sizes = np.array(list(Counter(step_group_uids).values()), dtype=np.float64)
+    if sizes.size == 0:
+        size_mean = size_p50 = size_p90 = 0.0
+        gt1 = 0.0
+        n_clusters = 0
+    else:
+        size_mean = float(sizes.mean())
+        size_p50 = float(np.percentile(sizes, 50))
+        size_p90 = float(np.percentile(sizes, 90))
+        gt1 = float((sizes > 1).mean())
+        n_clusters = int(sizes.size)
+
+    return {
+        "essa/episode_adv_mean_abs": ep_mean,
+        "essa/step_adv_mean_abs": step_mean,
+        "essa/step_adv_share": share_mean,
+        "essa/cluster_size_mean": size_mean,
+        "essa/cluster_size_p50": size_p50,
+        "essa/cluster_size_p90": size_p90,
+        "essa/cluster_size_gt1_ratio": gt1,
+        "essa/n_clusters": float(n_clusters),
+    }
 
 
 def episode_norm_reward(token_level_rewards: torch.Tensor,

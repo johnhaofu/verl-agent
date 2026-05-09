@@ -343,7 +343,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         data.batch["advantages"] = advantages
         data.batch["returns"] = returns
     elif adv_estimator == AdvantageEstimator.GiGPO:
-        advantages, returns = core_gigpo.compute_gigpo_outcome_advantage(
+        advantages, returns, essa_diag = core_gigpo.compute_gigpo_outcome_advantage(
             token_level_rewards=data.batch['token_level_rewards'], # for episode group reward computing
             step_rewards=data.batch['step_rewards'], # for step group reward computing
             response_mask=data.batch['response_mask'],
@@ -357,6 +357,7 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
             )
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
+        data.meta_info["essa_diag"] = essa_diag
     else:
         raise NotImplementedError
     return data
@@ -1214,13 +1215,11 @@ class RayPPOTrainer:
                         else:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
 
-                        # Group-Null-Advantage SFT gating (DFG-RL, group-local form).
-                        # SFT applies exactly to trajectories in all-pass groups -- where
-                        # GRPO advantage is structurally zero AND there is a winner to
-                        # imitate. Mixed groups: pure RL. All-fail groups: nothing to do.
-                        # Threshold-free; aligned with GRPO's own group normalization.
-                        # Set algorithm.dfg.enable=False to fall back to the v2-distill
-                        # always-on behavior (kept for ablation only).
+                        # Group-structure metrics (decidable / all-pass / all-fail
+                        # fractions). Always logged regardless of DFG, since they
+                        # describe the batch's RL signal density. Optionally,
+                        # if actor.distill_alpha>0 and algorithm.dfg.enable=True,
+                        # inject is_winner so dp_actor applies SFT-on-winners.
                         from verl.trainer.ppo.dfg_gating import (
                             compute_group_stats,
                             compute_group_null_winner_mask,
@@ -1231,10 +1230,10 @@ class RayPPOTrainer:
                         episode_rewards = batch.batch["token_level_rewards"].sum(dim=-1)  # (B,)
                         group_n = self.config.actor_rollout_ref.rollout.n
                         gstats = compute_group_stats(episode_rewards, group_n=group_n, pass_threshold=0.5)
-                        metrics["dfg/decidable_fraction"] = gstats["decidable_fraction"]
-                        metrics["dfg/all_pass_fraction"] = gstats["all_pass_fraction"]
-                        metrics["dfg/all_fail_fraction"] = gstats["all_fail_fraction"]
-                        metrics["dfg/group_pass_rate"] = gstats["group_pass_rate"]
+                        metrics["group_stats/decidable_fraction"] = gstats["decidable_fraction"]
+                        metrics["group_stats/all_pass_fraction"] = gstats["all_pass_fraction"]
+                        metrics["group_stats/all_fail_fraction"] = gstats["all_fail_fraction"]
+                        metrics["group_stats/group_pass_rate"] = gstats["group_pass_rate"]
 
                         if distill_alpha_cfg > 0.0:
                             response_len = batch.batch["responses"].size(1)
@@ -1245,31 +1244,11 @@ class RayPPOTrainer:
                                 metrics["dfg/sft_active_fraction"] = sft_active_frac
                                 if sft_active_frac > 0.0:
                                     batch.batch["is_winner"] = winner_per_traj.unsqueeze(-1).expand(-1, response_len).contiguous()
-                                    print(
-                                        f"[DFG] D={gstats['decidable_fraction']:.3f} "
-                                        f"all_pass={gstats['all_pass_fraction']:.3f} "
-                                        f"all_fail={gstats['all_fail_fraction']:.3f} "
-                                        f"sft_active={sft_active_frac:.3f}",
-                                        flush=True,
-                                    )
-                                else:
-                                    print(
-                                        f"[DFG] D={gstats['decidable_fraction']:.3f} "
-                                        f"all_pass=0 sft=OFF (no all-pass groups)",
-                                        flush=True,
-                                    )
                             else:
                                 # Ablation path: v2-distill always-on (any reward>=0.5 wins).
                                 is_winner = (episode_rewards >= 0.5).float()
                                 metrics["dfg/sft_active_fraction"] = float(is_winner.mean().item())
                                 batch.batch["is_winner"] = is_winner.unsqueeze(-1).expand(-1, response_len).contiguous()
-                                print(
-                                    f"[DFG-OFF] always-on distill, winners="
-                                    f"{int(is_winner.sum().item())}/{is_winner.numel()}",
-                                    flush=True,
-                                )
-                        else:
-                            metrics["dfg/sft_active_fraction"] = 0.0
 
                         # compute advantages, executed on the driver process
 
@@ -1291,6 +1270,10 @@ class RayPPOTrainer:
                             gigpo_enable_similarity= self.config.algorithm.gigpo.enable_similarity,
                             gigpo_similarity_thresh=self.config.algorithm.gigpo.similarity_thresh,
                         )
+
+                        # Pull ESSA / inner-group diagnostics (set by core_gigpo).
+                        if "essa_diag" in batch.meta_info:
+                            metrics.update(batch.meta_info["essa_diag"])
 
                     # update critic
                     if self.use_critic:
