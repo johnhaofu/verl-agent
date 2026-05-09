@@ -310,7 +310,9 @@ class HorizonAgentEnv:
 
         # Detect "fix(X) -> submit(X) without iteration" (Cursor-style
         # repeat-submit penalty). Compute BEFORE updating _last_fix_arg.
-        repeat_no_iter = (
+        # Force bool — `and` short-circuit can return "" (empty str) when
+        # _last_fix_arg is empty, which int() then rejects downstream.
+        repeat_no_iter = bool(
             verb == "submit"
             and self._last_fix_arg
             and self._normalize_json(template_json) == self._last_fix_arg
