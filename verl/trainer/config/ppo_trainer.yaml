@@ -255,6 +255,10 @@ algorithm:
   filter_groups: # DAPO from https://arxiv.org/abs/2503.14476
     enable: False
     max_num_gen_batches: 10
+  dfg: # Decidable-Fraction-Gated RL (DFG-RL): per-step gate SFT-on-winners loss
+    enable: False
+    threshold_low: 0.30   # D < this -> sparse regime, distill ON
+    threshold_high: 0.70  # D > this -> saturated regime (curriculum/early-stop signal)
 
 trainer:
   balance_batch: True

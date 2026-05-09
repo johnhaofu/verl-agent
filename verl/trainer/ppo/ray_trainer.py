@@ -1214,19 +1214,56 @@ class RayPPOTrainer:
                         else:
                             batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
 
-                        # Best-Trajectory Distillation: mark winning trajectories so the
-                        # actor can apply an SFT loss on their tokens. Threshold 0.5
-                        # captures a compile-pass (1.0+) even after up to ~5 invalid
-                        # action penalties (-0.1 each). Failed episodes top out at 0.2
-                        # (with OPD step credits).
+                        # DFG-RL gating: compute decidable fraction D and decide whether
+                        # to inject `is_winner` (which the actor uses to apply SFT loss).
+                        # Sparse regime (D<low) -> distill ON; healthy/saturated -> OFF.
+                        # Setting actor.distill_alpha>0 plus algorithm.dfg.enable=False
+                        # reproduces the v2-distill always-on behavior.
+                        from verl.trainer.ppo.dfg_gating import (
+                            compute_decidable_fraction,
+                            classify_regime,
+                            should_apply_distill,
+                        )
                         distill_alpha_cfg = self.config.actor_rollout_ref.actor.get("distill_alpha", 0.0)
-                        print(f"[DISTILL TRAINER DEBUG] distill_alpha_cfg={distill_alpha_cfg}", flush=True)
+                        dfg_cfg = self.config.algorithm.get("dfg", None)
+                        dfg_enable = bool(dfg_cfg.get("enable", False)) if dfg_cfg is not None else False
+                        episode_rewards = batch.batch["token_level_rewards"].sum(dim=-1)  # (bsz,)
+                        group_n = self.config.actor_rollout_ref.rollout.n
+                        decidable_fraction, group_pass_rate = compute_decidable_fraction(
+                            episode_rewards, group_n=group_n, pass_threshold=0.5
+                        )
+                        if dfg_enable:
+                            thr_low = float(dfg_cfg.get("threshold_low", 0.30))
+                            thr_high = float(dfg_cfg.get("threshold_high", 0.70))
+                        else:
+                            thr_low, thr_high = 0.30, 0.70
+                        regime = classify_regime(decidable_fraction, thr_low, thr_high)
+                        metrics["dfg/decidable_fraction"] = decidable_fraction
+                        metrics["dfg/group_pass_rate"] = group_pass_rate
+                        metrics["dfg/regime_sparse"] = float(regime == "sparse")
+                        metrics["dfg/regime_healthy"] = float(regime == "healthy")
+                        metrics["dfg/regime_saturated"] = float(regime == "saturated")
+
                         if distill_alpha_cfg > 0.0:
-                            episode_rewards = batch.batch["token_level_rewards"].sum(dim=-1)  # (bsz,)
-                            is_winner = (episode_rewards >= 0.5).float()                       # (bsz,)
-                            response_len = batch.batch["responses"].size(1)
-                            batch.batch["is_winner"] = is_winner.unsqueeze(-1).expand(-1, response_len).contiguous()
-                            print(f"[DISTILL TRAINER DEBUG] is_winner set in batch.batch, winners={int(is_winner.sum().item())}/{is_winner.numel()}", flush=True)
+                            inject_distill = (not dfg_enable) or should_apply_distill(regime)
+                            metrics["dfg/distill_active"] = float(inject_distill)
+                            if inject_distill:
+                                is_winner = (episode_rewards >= 0.5).float()
+                                response_len = batch.batch["responses"].size(1)
+                                batch.batch["is_winner"] = is_winner.unsqueeze(-1).expand(-1, response_len).contiguous()
+                                print(
+                                    f"[DFG] D={decidable_fraction:.3f} regime={regime} distill=ON "
+                                    f"winners={int(is_winner.sum().item())}/{is_winner.numel()}",
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    f"[DFG] D={decidable_fraction:.3f} regime={regime} distill=OFF",
+                                    flush=True,
+                                )
+                        else:
+                            metrics["dfg/distill_active"] = 0.0
+                            print(f"[DFG] D={decidable_fraction:.3f} regime={regime} distill=disabled-by-config", flush=True)
 
                         # compute advantages, executed on the driver process
 
