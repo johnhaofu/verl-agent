@@ -631,10 +631,16 @@ class HorizonEnvironmentManager(EnvironmentManagerBase):
         self.memory.store({"text_obs": self.pre_text_obs, "action": actions})
         self.pre_text_obs = next_obs
 
+        # ESSA: anchor = canonical error fingerprint per env, set by core_env
+        # in info["essa_anchor"]. Falls back to next_obs only if missing.
+        essa_anchors = [
+            str(info.get("essa_anchor", next_obs[i] if i < len(next_obs) else "?"))
+            for i, info in enumerate(infos)
+        ]
         next_observations = {
             "text": self.build_text_obs(next_obs, init=False),
             "image": None,
-            "anchor": next_obs.copy(),
+            "anchor": essa_anchors,
         }
         for i, info in enumerate(infos):
             info["is_action_valid"] = to_numpy(valids[i])

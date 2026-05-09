@@ -33,6 +33,8 @@ for _p in _possible_lib_paths:
 from horizon_env import HorizonEnvironment  # type: ignore  # local theme reader
 from sitemuse_validator import SitemuseValidator  # type: ignore  # API validator
 
+from .error_anchor import essa_anchor  # ESSA step anchor for inner-group GiGPO
+
 
 _VERB_RE = re.compile(
     r"^(list_sections|describe_section|describe_block|submit|fix)\[(.*)\]\s*$",
@@ -181,6 +183,7 @@ class HorizonAgentEnv:
         }
 
         if self._finished:
+            info["essa_anchor"] = ("done", "noop")
             return self._last_obs, 0.0, True, info
 
         self._steps_done += 1
@@ -188,21 +191,34 @@ class HorizonAgentEnv:
 
         m = _VERB_RE.match(inner_action.strip()) if inner_action else None
         if m is None:
-            return self._invalid_action(timeout, info)
+            obs, r, done, info = self._invalid_action(timeout, info)
+            info["essa_anchor"] = essa_anchor(verb="", arg="", won=False, invalid=True, error_message="")
+            return obs, r, done, info
 
         verb, arg = m.group(1), m.group(2).strip()
 
         if verb == "list_sections":
-            return self._list_sections(timeout, info)
-        if verb == "describe_section":
-            return self._describe(arg, kind="section", timeout=timeout, info=info)
-        if verb == "describe_block":
-            return self._describe(arg, kind="block", timeout=timeout, info=info)
-        if verb == "submit":
-            return self._submit(arg, terminal=True, info=info)
-        if verb == "fix":
-            return self._submit(arg, terminal=timeout, info=info)
-        return self._invalid_action(timeout, info)
+            obs, r, done, info = self._list_sections(timeout, info)
+        elif verb == "describe_section":
+            obs, r, done, info = self._describe(arg, kind="section", timeout=timeout, info=info)
+        elif verb == "describe_block":
+            obs, r, done, info = self._describe(arg, kind="block", timeout=timeout, info=info)
+        elif verb == "submit":
+            obs, r, done, info = self._submit(arg, terminal=True, info=info)
+        elif verb == "fix":
+            obs, r, done, info = self._submit(arg, terminal=timeout, info=info)
+        else:
+            obs, r, done, info = self._invalid_action(timeout, info)
+            verb = ""
+
+        info["essa_anchor"] = essa_anchor(
+            verb=verb,
+            arg=arg if verb in ("describe_section", "describe_block") else "",
+            won=info.get("won", False),
+            invalid=info.get("invalid_action", False),
+            error_message=info.get("error_message", ""),
+        )
+        return obs, r, done, info
 
     # ------------------------------------------------------------------
     # Internals
