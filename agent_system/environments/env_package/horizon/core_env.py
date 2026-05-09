@@ -71,6 +71,15 @@ class HorizonAgentEnv:
         invalid_action_penalty: float = -0.1,
         opd_step_reward: float = 0.0,
         opd_max_credited_validates: int = 2,
+        # Cursor-style product-penalty reward shaping (Composer 2 §4.2).
+        # Penalize "started but not finished" tool patterns: declared section
+        # types with no settings/blocks, schemas described but never used in
+        # the submission, repeated identical fix-then-submit. Bonus for
+        # describe-then-use (rewards exploration that pays off).
+        empty_section_penalty: float = 0.0,    # per empty section in submitted JSON
+        unused_describe_penalty: float = 0.0,  # per describe_X without using X type
+        used_describe_bonus: float = 0.0,      # per describe_X used in submission
+        repeat_submit_penalty: float = 0.0,    # for fix(X) -> submit(X) without iteration
         api_url: Optional[str] = None,
         api_token: Optional[str] = None,
         api_shop_id: Optional[str] = None,
@@ -96,6 +105,11 @@ class HorizonAgentEnv:
         # (paper §3.1 — "validate" action densifies signal). 0.0 = OPD off.
         self.opd_step_reward = opd_step_reward
         self.opd_max_credited_validates = opd_max_credited_validates
+        # Cursor-style product penalties (all default 0 = disabled).
+        self.empty_section_penalty = empty_section_penalty
+        self.unused_describe_penalty = unused_describe_penalty
+        self.used_describe_bonus = used_describe_bonus
+        self.repeat_submit_penalty = repeat_submit_penalty
 
         validator_kwargs: dict[str, Any] = {"timeout": api_timeout}
         if api_url is not None:
@@ -115,6 +129,10 @@ class HorizonAgentEnv:
         self._finished = False
         self._last_won = False
         self._last_obs: str = ""
+        # Per-episode tracking for product penalties.
+        self._described_sections: set[str] = set()
+        self._described_blocks: set[str] = set()
+        self._last_fix_arg: str = ""
 
     @property
     def n_examples(self) -> int:
@@ -141,6 +159,10 @@ class HorizonAgentEnv:
         self._finished = False
         self._last_won = False
         self._fix_count = 0  # OPD: count of fix/submit "validate-like" calls
+        # Reset per-episode tracking for product penalties.
+        self._described_sections = set()
+        self._described_blocks = set()
+        self._last_fix_arg = ""
 
         obs_text = (
             f"Task: Generate a Shopify Horizon theme template.\n"
@@ -204,9 +226,9 @@ class HorizonAgentEnv:
         elif verb == "describe_block":
             obs, r, done, info = self._describe(arg, kind="block", timeout=timeout, info=info)
         elif verb == "submit":
-            obs, r, done, info = self._submit(arg, terminal=True, info=info)
+            obs, r, done, info = self._submit(arg, terminal=True, info=info, verb="submit")
         elif verb == "fix":
-            obs, r, done, info = self._submit(arg, terminal=timeout, info=info)
+            obs, r, done, info = self._submit(arg, terminal=timeout, info=info, verb="fix")
         else:
             obs, r, done, info = self._invalid_action(timeout, info)
             verb = ""
@@ -239,9 +261,13 @@ class HorizonAgentEnv:
         if kind == "section":
             available = self.base.available_sections
             ext = "sections"
+            if name in available:
+                self._described_sections.add(name)
         else:
             available = self.base.available_blocks
             ext = "blocks"
+            if name in available:
+                self._described_blocks.add(name)
 
         if name not in available:
             obs = (
@@ -275,12 +301,22 @@ class HorizonAgentEnv:
         self._last_obs = obs
         return obs, 0.0, timeout, info
 
-    def _submit(self, template_json: str, terminal: bool, info: dict):
+    def _submit(self, template_json: str, terminal: bool, info: dict, verb: str = "submit"):
         # Sitemuse expects "templates/<type>.json" filename; the
         # validator's _call_upsert_api handles the prefix internally
         # if no slash is given, but we pass the explicit path for clarity.
         file_path = f"templates/{self._template_type}.json"
         result = self.validator.validate(file_path, template_json)
+
+        # Detect "fix(X) -> submit(X) without iteration" (Cursor-style
+        # repeat-submit penalty). Compute BEFORE updating _last_fix_arg.
+        repeat_no_iter = (
+            verb == "submit"
+            and self._last_fix_arg
+            and self._normalize_json(template_json) == self._last_fix_arg
+        )
+        if verb == "fix":
+            self._last_fix_arg = self._normalize_json(template_json)
 
         # Compiler-OPD: +step_reward for first K validate-like calls.
         # Both fix and submit count as "validate" since both hit the API.
@@ -301,8 +337,12 @@ class HorizonAgentEnv:
             info["validation"] = result.to_reward_dict()
             info["opd_step_reward"] = opd_step
             self._last_obs = obs
-            # Terminal pass: 1.0 + OPD bonus this turn (capped)
-            return obs, 1.0 + opd_step, True, info
+            # Cursor-style product penalties / bonus on compile-pass terminal.
+            shape = self._compute_reward_shaping(template_json, repeat_no_iter)
+            for k, v in shape.items():
+                info[f"shape/{k}"] = v
+            reward = 1.0 + opd_step + shape["total"]
+            return obs, reward, True, info
 
         err = result.get_error_message()
         obs = (
@@ -325,6 +365,93 @@ class HorizonAgentEnv:
         # Non-terminal fail (fix[] within budget): just OPD step credit
         self._last_obs = obs
         return obs, opd_step, False, info
+
+    @staticmethod
+    def _normalize_json(s: str) -> str:
+        """Canonicalize JSON string for repeat-submit detection.
+        Returns parsed-then-dumped form to ignore whitespace/key-order; falls
+        back to the raw stripped string if parse fails (treat as opaque)."""
+        try:
+            import json as _json
+            return _json.dumps(_json.loads(s), sort_keys=True, separators=(",", ":"))
+        except Exception:  # noqa: BLE001
+            return (s or "").strip()
+
+    def _compute_reward_shaping(self, template_json: str, repeat_no_iter: bool) -> dict:
+        """Cursor-style product-penalty shaping (Composer 2 §4.2).
+
+        Decomposes "good submission" into structural signals beyond compile:
+            - empty_section_penalty: declared section with empty settings AND
+              empty blocks (Cursor's "started but didn't finish" analog)
+            - unused_describe_penalty: schemas explored via describe_section/
+              describe_block but never used in submitted types
+            - used_describe_bonus:    explored AND used (rewards
+              exploration-pays-off behavior)
+            - repeat_submit_penalty:  fix(X) -> submit(X) with identical JSON,
+              i.e. "iterate" was theatrical
+
+        All terms default 0 (disabled). On disable, returns total=0 and the
+        reward function reduces to v3-essa baseline exactly.
+        """
+        out = {
+            "empty_section": 0,
+            "unused_describe": 0,
+            "used_describe": 0,
+            "repeat_submit": 0,
+            "n_described_sections": len(self._described_sections),
+            "n_described_blocks": len(self._described_blocks),
+            "total": 0.0,
+        }
+        try:
+            import json as _json
+            parsed = _json.loads(template_json)
+        except Exception:  # noqa: BLE001
+            return out
+
+        sections = parsed.get("sections") or {}
+        if not isinstance(sections, dict):
+            return out
+
+        # Empty section count (declared type but no settings AND no blocks).
+        empty_count = 0
+        submitted_types: set[str] = set()
+        submitted_block_types: set[str] = set()
+        for sec in sections.values():
+            if not isinstance(sec, dict):
+                continue
+            sec_type = sec.get("type")
+            if isinstance(sec_type, str):
+                submitted_types.add(sec_type)
+            settings = sec.get("settings") or {}
+            blocks = sec.get("blocks") or {}
+            if not settings and not blocks:
+                empty_count += 1
+            if isinstance(blocks, dict):
+                for blk in blocks.values():
+                    if isinstance(blk, dict):
+                        bt = blk.get("type")
+                        if isinstance(bt, str):
+                            submitted_block_types.add(bt.lstrip("_"))
+
+        # Describe coverage.
+        sec_used = self._described_sections & submitted_types
+        sec_unused = self._described_sections - submitted_types
+        blk_used = self._described_blocks & submitted_block_types
+        blk_unused = self._described_blocks - submitted_block_types
+
+        out["empty_section"] = empty_count
+        out["used_describe"] = len(sec_used) + len(blk_used)
+        out["unused_describe"] = len(sec_unused) + len(blk_unused)
+        out["repeat_submit"] = int(repeat_no_iter)
+
+        total = (
+            -self.empty_section_penalty * empty_count
+            -self.unused_describe_penalty * out["unused_describe"]
+            +self.used_describe_bonus * out["used_describe"]
+            -self.repeat_submit_penalty * out["repeat_submit"]
+        )
+        out["total"] = float(total)
+        return out
 
     def _invalid_action(self, timeout: bool, info: dict):
         obs = (

@@ -907,6 +907,11 @@ def make_envs(config):
             "invalid_action_penalty": config.env.horizon.get("invalid_action_penalty", -0.1),
             "opd_step_reward": config.env.horizon.get("opd_step_reward", 0.0),
             "opd_max_credited_validates": config.env.horizon.get("opd_max_credited_validates", 2),
+            # Cursor-style product penalties (default 0 = v3-essa baseline behavior).
+            "empty_section_penalty": config.env.horizon.get("empty_section_penalty", 0.0),
+            "unused_describe_penalty": config.env.horizon.get("unused_describe_penalty", 0.0),
+            "used_describe_bonus": config.env.horizon.get("used_describe_bonus", 0.0),
+            "repeat_submit_penalty": config.env.horizon.get("repeat_submit_penalty", 0.0),
         }
         val_env_kwargs = dict(env_kwargs)
         val_env_kwargs["split"] = config.env.horizon.get("val_split", "val")
